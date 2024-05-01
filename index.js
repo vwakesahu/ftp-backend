@@ -1,56 +1,80 @@
-// server.js
-
-const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const multer = require('multer');
+const express = require("express");
+const bodyParser = require("body-parser");
+const cors = require("cors");
+const multer = require("multer");
+const fs = require("fs");
 
 const app = express();
-app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    // You can also set other CORS headers as needed
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        res.sendStatus(200);
-    } else {
-        next();
-    }
-});
 
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, 'uploads/');
-    },
-    filename: function (req, file, cb) {
-        cb(null, file.originalname);
-    }
-});
-
+const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-app.post('/upload', upload.single('file'), (req, res) => {
-    const filePath = path.join(__dirname, 'uploads', req.file.filename);
-    const fileStream = fs.createWriteStream(filePath);
+const PORT = 5000;
+app.use(cors());
+// parse application/x-www-form-urlencoded
+app.use(bodyParser.urlencoded({ extended: false }));
 
-    req.on('data', (chunk) => {
-        console.log(chunk)
-        fileStream.write(chunk);
-    });
+// parse application/json
+app.use(bodyParser.json());
 
-    req.on('end', () => {
-        fileStream.end();
-        res.status(200).json({ message: 'File uploaded successfully' });
-    });
-
-    req.on('error', (err) => {
-        console.error('Error uploading file:', err);
-        res.status(500).json({ message: 'Error uploading file' });
-    });
+app.get("/test", (req, res) => {
+  console.log({ req });
+  res.send("Hello world");
 });
 
-const PORT = process.env.PORT || 5000;
+const mergeChunks = async (fileName, totalChunks) => {
+  const chunkDir = __dirname + "/chunks";
+  const mergedFilePath = __dirname + "/merged_files";
+
+  if (!fs.existsSync(mergedFilePath)) {
+    fs.mkdirSync(mergedFilePath);
+  }
+
+  const writeStream = fs.createWriteStream(`${mergedFilePath}/${fileName}`);
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkFilePath = `${chunkDir}/${fileName}.part_${i}`;
+    const chunkBuffer = await fs.promises.readFile(chunkFilePath);
+    writeStream.write(chunkBuffer);
+    fs.unlinkSync(chunkFilePath); // Delete the individual chunk file after merging
+  }
+
+  writeStream.end();
+  console.log("Chunks merged successfully");
+};
+
+app.post("/upload", upload.single("file"), async (req, res) => {
+  console.log("Hit");
+  const chunk = req.file.buffer;
+  console.log(chunk)
+  const chunkNumber = Number(req.body.chunkNumber); // Sent from the client
+  const totalChunks = Number(req.body.totalChunks); // Sent from the client
+  const fileName = req.body.originalname;
+
+  const chunkDir = __dirname + "/chunks"; // Directory to save chunks
+
+  if (!fs.existsSync(chunkDir)) {
+    fs.mkdirSync(chunkDir);
+  }
+
+  const chunkFilePath = `${chunkDir}/${fileName}.part_${chunkNumber}`;
+
+  try {
+    await fs.promises.writeFile(chunkFilePath, chunk);
+    console.log(`Chunk ${chunkNumber}/${totalChunks} saved`);
+
+    if (chunkNumber === totalChunks - 1) {
+      // If this is the last chunk, merge all chunks into a single file
+      await mergeChunks(fileName, totalChunks);
+      console.log("File merged successfully");
+    }
+
+    res.status(200).json({ message: "Chunk uploaded successfully" });
+  } catch (error) {
+    console.error("Error saving chunk:", error);
+    res.status(500).json({ error: "Error saving chunk" });
+  }
+});
+
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+  console.log(`Port listening on ${PORT}`);
 });
